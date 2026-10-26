@@ -49,6 +49,18 @@ check_path() {
   fi
 }
 
+# Run the original wizard unchanged, with only the domain explicitly entered here.
+# Clear inherited preset answers in the child process so its prompts stay available.
+run_official_installer() (
+  local selected_domain=$1 variable
+  while IFS= read -r variable; do
+    unset "$variable"
+  done < <(compgen -A variable NETBIRD_ || true)
+  unset DEBIAN_FRONTEND
+  export NETBIRD_DOMAIN="$selected_domain"
+  bash ./getting-started.sh
+)
+
 install_server() {
   local domain=${1:-} label dns_ips busy codename pkg
   local -a conflicts=()
@@ -93,11 +105,15 @@ printf 'DNS for %s:\n%s\n' "$domain" "$dns_ips"
 printf 'These addresses must point to this server (its public IP when behind NAT).\n'
 printf 'Cloud firewall/router: allow inbound TCP 80/443 and UDP 3478. Use Cloudflare DNS only.\n'
 
-step 'Checking ports for the bundled Traefik reverse proxy'
+step 'Showing current listeners for the setup wizard'
 busy=$(ss -H -ltn '( sport = :80 or sport = :443 )')
-[[ -z "$busy" ]] || die "TCP 80/443 already in use. Configure the existing reverse proxy separately: $busy"
+if [[ -n "$busy" ]]; then
+  printf '%sTCP 80/443 already in use. Select an appropriate existing reverse proxy option in the official wizard:%s\n%s\n' "$YELLOW" "$RESET" "$busy"
+fi
 busy=$(ss -H -lun 'sport = :3478')
-[[ -z "$busy" ]] || die "UDP 3478 already in use: $busy"
+if [[ -n "$busy" ]]; then
+  printf '%sUDP 3478 already in use. Review this listener and the wizard configuration:%s\n%s\n' "$YELLOW" "$RESET" "$busy"
+fi
 
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
 step 'Installing Docker from the official APT repository'
@@ -150,17 +166,10 @@ curl --fail --silent --show-error --location --retry 3 \
   https://github.com/netbirdio/netbird/releases/latest/download/getting-started.sh \
   -o getting-started.sh
 bash -n getting-started.sh
-export NETBIRD_DOMAIN="$domain"
-export NETBIRD_REVERSE_PROXY_TYPE=0
-export NETBIRD_ENABLE_PROXY=false
-export NETBIRD_NON_INTERACTIVE=false
-# Keep the official installer's email/onboarding prompts.
-unset DEBIAN_FRONTEND
-printf '\nIn the NetBird setup wizard:\n'
-printf ' - The bundled Traefik reverse proxy handles HTTPS.\n'
-printf ' - Optional NetBird Proxy is disabled for this standard VPN installation.\n'
-printf ' - Complete the remaining prompts, including your certificate email.\n\n'
-bash ./getting-started.sh
+printf '\n%sStarting the original interactive NetBird setup wizard.%s\n' "$CYAN" "$RESET"
+printf 'Choose your reverse proxy, optional services and all remaining settings in the wizard.\n'
+printf 'Only the domain you entered above is passed as a preset answer.\n\n'
+run_official_installer "$domain"
 
 step 'Container status'
 docker compose ps
