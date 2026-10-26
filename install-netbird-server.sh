@@ -57,8 +57,12 @@ install_server() {
     [[ -z "$(find "$install_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]] || die "$install_dir is not empty. Check status or uninstall using the menu first."
   fi
   while :; do
-    read -r -p "${YELLOW}NetBird domain [${domain:-cloud.ukm.net.tr}]: ${RESET}" answer
-    domain=${answer:-${domain:-cloud.ukm.net.tr}}
+    if [[ -n "$domain" ]]; then
+      read -r -p "${YELLOW}NetBird domain [$domain]: ${RESET}" answer
+      domain=${answer:-$domain}
+    else
+      read -r -p "${YELLOW}Enter your NetBird domain: ${RESET}" domain
+    fi
     domain=${domain,,}
     if validate_domain "$domain"; then break; fi
     printf 'Invalid domain. Enter a hostname without https://, a port or a path.\n'
