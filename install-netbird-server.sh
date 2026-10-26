@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 2.0 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 2.1 — Ubuntu / Debian, systemd, Bash 4+
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
 # Docker, other projects, the host NetBird client, DNS and cloud rules stay intact.
@@ -19,7 +19,7 @@ trap 'printf "\n%sERROR at line %s. Operation stopped.%s\n" "$RED" "$LINENO" "$R
 
 header() {
   printf '\n%s%s       ◢◤  NETBIRD%s\n' "$BOLD" "$CYAN" "$RESET"
-  printf '%s       ◥◣  SERVER MANAGER  2.0%s\n' "$BLUE" "$RESET"
+  printf '%s       ◥◣  SERVER MANAGER  2.1%s\n' "$BLUE" "$RESET"
   printf '           Install · Uninstall · Status\n\n'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
 }
@@ -197,6 +197,31 @@ status_server() {
   if [[ -d "$install_dir" ]]; then du -sh "$install_dir"; fi
 }
 
+# The official installer defines traefik, crowdsec and proxy in this same
+# Compose stack. Prefer its own teardown; use label-based recovery if YAML
+# is missing/invalid, or if down leaves orphaned resources behind.
+compose_cleanup() {
+  local project file=''
+  for file in "$install_dir/docker-compose.yml" "$install_dir/docker-compose.yaml" "$install_dir/compose.yml" "$install_dir/compose.yaml"; do
+    [[ -f "$file" ]] && break
+  done
+  [[ -f "$file" ]] || { printf 'Compose file missing; using Docker project labels.\n'; return 0; }
+  if ! docker compose version >/dev/null 2>&1; then
+    printf 'Compose plugin unavailable; using Docker project labels.\n'
+    return 0
+  fi
+  for project in "$@"; do
+    if docker compose --project-directory "$install_dir" --file "$file" --project-name "$project" config --quiet; then
+      step "Stopping the complete Compose stack: $project (including bundled Traefik and CrowdSec)"
+      if ! docker compose --project-directory "$install_dir" --file "$file" --project-name "$project" down --volumes --remove-orphans; then
+        printf '%sCompose teardown did not finish; checking remaining labelled resources.%s\n' "$YELLOW" "$RESET"
+      fi
+    else
+      printf 'Compose configuration invalid; using Docker project labels for %s.\n' "$project"
+    fi
+  done
+}
+
 uninstall_server() {
   check_path
   command -v docker >/dev/null || die 'Docker is missing. Installation files are retained for manual inspection.'
@@ -264,6 +289,13 @@ uninstall_server() {
   printf '  Directory: %s (including database, configuration and certificates)\n' "$install_dir"
   printf '  Compose projects: %s\n' "${projects[*]}"
   printf '  Container: %s\n' "${containers[*]:-none}"
+  if ((${#containers[@]})); then
+    printf '\nContainers selected for removal (including optional services):\n'
+    for id in "${containers[@]}"; do
+      row=$(docker inspect "$id")
+      jq -r '.[0] | "  \(.Name | ltrimstr("/")) | \(.Config.Image // .Image) | \(.State.Status // "unknown")"' <<< "$row"
+    done
+  fi
   printf '  Volumes: %s\n' "${volumes[*]:-none}"
   printf '  Networks: %s\n' "${networks[*]:-none}"
   printf '  Images used by these containers, if no other container uses them.\n'
@@ -275,10 +307,26 @@ uninstall_server() {
   printf '\nAccounts and registered peers will be lost. Docker and the host client stay installed.\n'
   read -r -p "${RED}Type DELETE to confirm: ${RESET}" confirmation
   [[ "$confirmation" == DELETE ]] || { printf 'Cancelled.\n'; return 0; }
-  # Remove containers with their anonymous volumes. No global Docker prune.
-  if ((${#containers[@]})); then docker rm -fv "${containers[@]}"; fi
-  if ((${#volumes[@]})); then docker volume rm "${volumes[@]}"; fi
-  if ((${#networks[@]})); then docker network rm "${networks[@]}"; fi
+  compose_cleanup "${projects[@]}"
+  # Remove leftovers after Compose teardown, including stopped/Created orphans.
+  # Query fresh inventories: do not treat an already deleted resource as an error.
+  for project in "${projects[@]}"; do
+    inventory=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      docker rm -fv "$id"
+    done <<< "$inventory"
+    inventory=$(docker volume ls -q --filter "label=com.docker.compose.project=$project")
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      docker volume rm "$id"
+    done <<< "$inventory"
+    inventory=$(docker network ls -q --filter "label=com.docker.compose.project=$project")
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      docker network rm "$id"
+    done <<< "$inventory"
+  done
   if ((${#images[@]})); then
     mapfile -t images < <(printf '%s\n' "${images[@]}" | sort -u)
     for image in "${images[@]}"; do
@@ -294,9 +342,19 @@ uninstall_server() {
     mapfile -t rules < <(LC_ALL=C ufw status numbered | sed -n '/# netbird-server-installer$/s/^\[[[:space:]]*\([0-9][0-9]*\)\].*/\1/p' | sort -rn)
     for id in "${rules[@]}"; do ufw --force delete "$id"; done
   fi
+  step 'Verifying that no containers, volumes or networks remain for the selected projects'
+  for project in "${projects[@]}"; do
+    inventory=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
+    [[ -z "$inventory" ]] || die "Containers remain for $project: $inventory. Installation files retained."
+    inventory=$(docker volume ls -q --filter "label=com.docker.compose.project=$project")
+    [[ -z "$inventory" ]] || die "Volumes remain for $project: $inventory. Installation files retained."
+    inventory=$(docker network ls -q --filter "label=com.docker.compose.project=$project")
+    [[ -z "$inventory" ]] || die "Networks remain for $project: $inventory. Installation files retained."
+  done
   check_path
   cd /
   rm -rf --one-file-system -- "$install_dir"
+  [[ ! -e "$install_dir" ]] || die "Installation directory still exists: $install_dir"
   success 'NetBird server removed. Docker stays installed. You can now install again.'
   printf 'Manage cloud firewall rules and DNS records separately in your provider portal.\n'
   if ((${#external[@]})); then printf 'The external data listed above has been retained.\n'; fi
