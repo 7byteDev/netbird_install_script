@@ -1,0 +1,1 @@
+# netbird_install_script
