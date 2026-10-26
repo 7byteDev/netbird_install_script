@@ -54,7 +54,7 @@ The script cannot configure your cloud provider’s firewall. Outbound access mu
 Upload `install-netbird-server.sh` to your server, then run:
 
 ```bash
-sudo bash install-netbird-server.sh netbird.example.com
+sudo bash install-netbird-server.sh
 ```
 
 Replace `netbird.example.com` with your domain.
@@ -62,7 +62,7 @@ Replace `netbird.example.com` with your domain.
 When logged in as root:
 
 ```bash
-bash install-netbird-server.sh netbird.example.com
+bash install-netbird-server.sh
 ```
 
 You can also omit the domain and enter it when prompted:
