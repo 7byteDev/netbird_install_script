@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 3.0.5 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 3.0.6 — Ubuntu / Debian, systemd, Bash 4+
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
 # Docker, other projects, the host NetBird client, DNS and cloud rules stay intact.
@@ -26,7 +26,7 @@ header() {
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
 LOGO
-  printf '%s%s        SERVER MANAGER 3.0.5%s\n' "$RESET" "$BLUE" "$RESET"
+  printf '%s%s        SERVER MANAGER 3.0.6%s\n' "$RESET" "$BLUE" "$RESET"
   printf 'Install | Uninstall | Update | Restore\n\n'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
 }
@@ -940,30 +940,23 @@ class Manager:
         targets = {}
         for service in selected:
             latest = self.latest(self.COMPONENTS[service][1])
-            prompt = f'Target release for {service}' + (f' [{latest}]' if latest != 'Unknown' else '') + ': '
-            value = self.ask(prompt) or (latest if latest != 'Unknown' else '')
-            if not semver(value):
-                raise Failure('Enter an explicit stable version, e.g. v1.2.3. No latest tag or prerelease is accepted.')
-            targets[service] = value
+            if not semver(latest):
+                raise Failure('No verified available stable release for ' + service + '. Update cancelled; no target version will be guessed.')
+            targets[service] = latest
         self.validate_pair(targets)
         self.preflight()
         planned = {}
         for service, version in targets.items():
             repo = repository(self.config['services'][service]['image'])
             tag = ('v' if service in ('dashboard', 'traefik', 'crowdsec') else '') + version.lstrip('v')
-            tag_answer = self.ask(f'Docker image tag for {service} [{tag}]: ')
-            if tag_answer:
-                tag = tag_answer
-            if semver(tag) != semver(version):
-                raise Failure('The Docker tag must match the selected release (with or without a v prefix).')
             planned[service] = repo + ':' + tag
         self.say('\nUpdate plan (selected services will be started, including currently stopped services):')
         for service in selected:
             print(f'  {service}: {self.installed(service)} -> {targets[service]} ({planned[service]})')
             print('  Release notes: https://github.com/' + self.COMPONENTS[service][1] + '/releases/tag/' + targets[service])
         print('All running project services will stop briefly for a complete consistent backup.')
-        print('Backup location: ' + str(self.backups) + '; Docker and OS packages are not updated.')
-        if self.ask('Type UPDATE to download images, back up and apply this plan: ') != 'UPDATE':
+        self.say('Backup location: ' + str(self.backups) + '; Docker and OS packages are not updated.', 32)
+        if self.credential_prompt('Type UPDATE to download images, back up and apply this plan: ') != 'UPDATE':
             print('Cancelled.')
             return
         original_containers = list(self.containers)
