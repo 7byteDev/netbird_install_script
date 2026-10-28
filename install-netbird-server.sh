@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 3.0.7 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 3.0.8 — Ubuntu / Debian, systemd, Bash 4+
 # Developer: Özgür Ulusoy
-# Home Page: https://7byte.dev/
+# Website: https://7byte.dev/
 # Github Repo: https://github.com/7byteDev
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
@@ -29,11 +29,11 @@ header() {
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
 LOGO
-  printf '%s%s        SERVER MANAGER 3.0.7%s\n' "$RESET" "$BLUE" "$RESET"
+  printf '%s%s        SERVER MANAGER 3.0.8%s\n' "$RESET" "$BLUE" "$RESET"
   printf 'Install | Uninstall | Update | Restore\n'
   printf '%s\n' '------------------------------------------------'
   printf '%-14s %s%s%s\n' 'Developer:' "$ORANGE" 'Özgür Ulusoy' "$RESET"
-  printf '%-14s %s%s%s\n' 'Home Page:' "$ORANGE" 'https://7byte.dev/' "$RESET"
+  printf '%-14s %s%s%s\n' 'Website:' "$ORANGE" 'https://7byte.dev/' "$RESET"
   printf '%-14s %s%s%s\n' 'Github Repo:' "$ORANGE" 'https://github.com/7byteDev' "$RESET"
   printf '%s\n\n' '------------------------------------------------'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
@@ -393,11 +393,10 @@ update_menu() {
       *) printf 'Cancelled.\n'; return 0 ;;
     esac
   fi
-  python3 - "$install_dir" <<'NETBIRD_UPDATE_PY'
+  if python3 - "$install_dir" <<'NETBIRD_UPDATE_PY'
 """Embedded update engine for NetBird Server Manager; Python 3.10+ and PyYAML."""
 import datetime as dt
 import hashlib
-import getpass
 import json
 import os
 from pathlib import Path
@@ -408,6 +407,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import termios
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -442,6 +442,86 @@ def masked_token(token):
     # Show only the explicitly requested short prefix, never a complete token.
     prefix = token[:5] if len(token) > 5 else ''
     return prefix + '*' * (len(token) - len(prefix))
+
+def read_masked_token(prompt):
+    """Read from the controlling TTY; never echo token characters after #5."""
+    fd = None
+    saved = None
+    value = []
+    escape = bytearray()
+    pasting = False
+    submitted = False
+    try:
+        fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+        saved = termios.tcgetattr(fd)
+        settings = list(saved)
+        settings[6] = list(saved[6])
+        settings[3] &= ~(termios.ECHO | termios.ECHONL | termios.ICANON | termios.IEXTEN | termios.ISIG)
+        settings[6][termios.VMIN] = 1
+        settings[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, settings)
+        os.write(fd, (prompt + '\n\x1b[?2004h').encode())
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                raise TerminalUnavailable('Token input closed; operation cancelled.')
+            complete = False
+            for char in chunk:
+                if escape:
+                    escape.append(char)
+                    if len(escape) == 2 and char not in (ord('['), ord('O')):
+                        escape.clear()
+                    elif len(escape) >= 3 and (0x40 <= char <= 0x7e):
+                        if bytes(escape) == b'\x1b[200~':
+                            pasting = True
+                        elif bytes(escape) == b'\x1b[201~':
+                            pasting = False
+                        escape.clear()
+                    elif len(escape) > 32:
+                        escape.clear()
+                    continue
+                if char == 27:
+                    escape.append(char)
+                elif char == 3:
+                    raise KeyboardInterrupt
+                elif char in (10, 13):
+                    if not pasting:
+                        complete = True
+                        break
+                elif char in (8, 127):
+                    if value:
+                        value.pop()
+                elif char in (21, 23):
+                    value.clear()
+                elif char == 4 and not value:
+                    raise TerminalUnavailable('Token input cancelled.')
+                elif 32 <= char <= 126:
+                    value.append(chr(char))
+            text = ''.join(value)
+            preview = text[:5] + '*' * max(0, len(text) - 5)
+            try:
+                width = max(8, (os.get_terminal_size(fd).columns or 80) - 1)
+            except OSError:
+                width = 79
+            if len(preview) > width:
+                preview = preview[:width - 3] + '...'
+            os.write(fd, ('\r' + preview + '\x1b[K').encode())
+            if complete:
+                os.write(fd, b'\n')
+                submitted = True
+                return text
+    except OSError as error:
+        raise TerminalUnavailable('Cannot read the interactive token input; operation cancelled.') from error
+    finally:
+        if fd is not None:
+            try:
+                if saved is not None:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            finally:
+                try:
+                    os.write(fd, (b'' if submitted else b'\n') + b'\x1b[?2004l')
+                finally:
+                    os.close(fd)
 
 def repository(image):
     image = image.split('@')[0]
@@ -498,7 +578,7 @@ class Manager:
     def credential_prompt(self, message, secret=False):
         prompt = f'\033[33m{message}\033[97m' if self.colors else message
         try:
-            return getpass.getpass(prompt) if secret else self.ask(prompt)
+            return read_masked_token(prompt) if secret else self.ask(prompt)
         finally:
             if self.colors:
                 print('\033[0m', end='', flush=True)
@@ -636,7 +716,6 @@ class Manager:
         if kind not in ('1', '2'):
             raise Failure('Select 1 or 2. No authentication type has been assumed.')
         token = self.credential_prompt('Temporary admin access token (hidden; session only): ', secret=True)
-        self.say(masked_token(token), 97)
         settings = {'url': url, 'scheme': 'Token' if kind == '1' else 'Bearer', 'token': token}
         data = self.request_version_api(settings)
         self.api_settings = settings
@@ -947,16 +1026,20 @@ class Manager:
         self.overview()
         if self.all_current:
             self.say('\nAll components are up to date. No update is required.', 32)
-            print('  [0] Back to UPDATE AND RECOVERY\n  [M] Back to main menu')
+            print('  [U] Back to UPDATE AND RECOVERY\n  [M] Back to main menu\n  [0] Exit')
             while True:
-                answer = self.credential_prompt('Select an option (0 or M): ').lower()
-                if answer == '0':
+                answer = self.credential_prompt('Select an option (U, M or 0): ').lower()
+                if answer == 'u':
                     return
                 if answer == 'm':
                     return 'main'
-                print('Please enter 0 or M.')
-        answer = self.credential_prompt('Select component numbers (space-separated), 0 = Update menu, M = Main menu: ')
+                if answer == '0':
+                    return 'exit'
+                print('Please enter U, M or 0.')
+        answer = self.credential_prompt('Select component numbers (space-separated), U = Update menu, M = Main menu, 0 = Exit: ')
         if answer == '0':
+            return 'exit'
+        if answer.lower() == 'u':
             return
         if answer.lower() == 'm':
             return 'main'
@@ -1156,8 +1239,11 @@ class Manager:
                     return
                 if choice == '1':
                     self.latest_cache.clear()
-                    if self.update() == 'main':
+                    destination = self.update()
+                    if destination == 'main':
                         return
+                    if destination == 'exit':
+                        raise SystemExit(20)
                 elif choice == '2':
                     self.restore_menu()
                 else:
@@ -1176,6 +1262,13 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal.default_int_handler)
     Manager(sys.argv[1]).menu()
 NETBIRD_UPDATE_PY
+  then
+    return 0
+  else
+    local update_status=$?
+    if [[ $update_status -eq 20 ]]; then exit 0; fi
+    return "$update_status"
+  fi
 }
 
 main() {
