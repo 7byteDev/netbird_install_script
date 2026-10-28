@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 3.0.1 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 3.0.3 — Ubuntu / Debian, systemd, Bash 4+
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
 # Docker, other projects, the host NetBird client, DNS and cloud rules stay intact.
@@ -26,7 +26,7 @@ header() {
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
 LOGO
-  printf '%s%s        SERVER MANAGER 3.0.1%s\n' "$RESET" "$BLUE" "$RESET"
+  printf '%s%s        SERVER MANAGER 3.0.3%s\n' "$RESET" "$BLUE" "$RESET"
   printf 'Install | Uninstall | Update | Restore\n\n'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
 }
@@ -389,6 +389,7 @@ update_menu() {
 """Embedded update engine for NetBird Server Manager; Python 3.10+ and PyYAML."""
 import datetime as dt
 import hashlib
+import getpass
 import json
 import os
 from pathlib import Path
@@ -400,6 +401,8 @@ import sys
 import tarfile
 import time
 import urllib.request
+import urllib.error
+import urllib.parse
 import yaml
 
 class Failure(RuntimeError):
@@ -471,6 +474,9 @@ class Manager:
         self.base = self.overlay = None
         self.project = None
         self.latest_cache = {}
+        self.api_cache = None
+        self.api_error = None
+        self.api_settings = None
         self.colors = sys.stdout.isatty() and 'NO_COLOR' not in os.environ
 
     def say(self, text, color=36):
@@ -500,6 +506,8 @@ class Manager:
         return self.run(command + list(args), **kwargs)
 
     def load(self):
+        self.api_cache = None
+        self.api_error = None
         if not self.root.is_dir() or self.root.is_symlink():
             raise Failure('Installation directory missing or unsafe. Use Restore if recovering a backup.')
         candidates = [self.root / n for n in ('compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml') if (self.root / n).exists()]
@@ -551,13 +559,79 @@ class Manager:
                 self.by_service[service] = c
         return self
 
+    def request_version_api(self, settings):
+        url = settings.get('url', '')
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
+            raise Failure('Use the exact HTTPS base URL of your NetBird server, without credentials or an API path.')
+        scheme = settings.get('scheme')
+        token = settings.get('token', '')
+        if scheme not in ('Token', 'Bearer') or not token or any(c.isspace() for c in token):
+            raise Failure('The API authentication settings are invalid.')
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None  # Never forward the Authorization header to another URL.
+        request = urllib.request.Request(url.rstrip('/') + '/api/instance/version', headers={
+            'Accept': 'application/json', 'Authorization': scheme + ' ' + token,
+            'User-Agent': 'NetBird-Server-Manager'})
+        try:
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=15) as response:
+                data = json.load(response)
+        except urllib.error.HTTPError as error:
+            messages = {401: 'token invalid or expired', 403: 'token has insufficient permissions',
+                        404: 'version endpoint not found'}
+            raise Failure('Version API HTTP ' + str(error.code) + ': ' + messages.get(error.code, 'request rejected; check the exact API base URL')) from None
+        except (OSError, ValueError, urllib.error.URLError):
+            raise Failure('Version API unavailable: check network, DNS, trusted TLS certificate and API URL.') from None
+        if not isinstance(data, dict) or not semver(data.get('management_current_version')):
+            raise Failure('Version API response lacks a valid management_current_version; no local estimate will be substituted.')
+        return data
+
+    def api_versions(self):
+        if self.api_cache is None:
+            self.api_cache = {}
+            try:
+                if not self.api_settings:
+                    raise Failure('Enter a temporary admin API token for this session using submenu option [4], or select Update to be prompted.')
+                self.api_cache = self.request_version_api(self.api_settings)
+            except (Failure, OSError, ValueError) as error:
+                self.api_error = str(error)
+        return self.api_cache
+
+    def configure_api(self):
+        if not self.root.is_dir() or self.root.is_symlink():
+            raise Failure('Install the server first, or restore its snapshot.')
+        self.say('\nADMIN API TOKEN REQUIRED')
+        print('Open your NetBird Dashboard: Team > Users > Owner User > Access Token.')
+        print('Create a temporary admin access token. Set expiration to 1 day.')
+        print('Copy it now; NetBird will not show the plain token again.')
+        print('After the update, delete/revoke this token in the Dashboard immediately.')
+        print('This script uses the token only in memory for this session; it is not saved to disk.')
+        if (self.root / '.manager-api.json').exists():
+            self.say('A token file from an older manager version exists. It is ignored; revoke its token and remove that file separately.', 33)
+        url = self.ask('NetBird HTTPS base URL (for your existing deployment): ').rstrip('/')
+        print('Authentication: [1] Personal access token (Token)  [2] OAuth access token (Bearer)')
+        kind = self.ask('Authentication type (1 or 2): ')
+        if kind not in ('1', '2'):
+            raise Failure('Select 1 or 2. No authentication type has been assumed.')
+        token = getpass.getpass('Temporary admin access token (hidden; session only): ')
+        settings = {'url': url, 'scheme': 'Token' if kind == '1' else 'Bearer', 'token': token}
+        data = self.request_version_api(settings)
+        self.api_settings = settings
+        self.api_cache, self.api_error = data, None
+        self.say('Authenticated version API confirmed. Token is held only for this session.', 32)
+
     def installed(self, service):
+        if service in ('netbird-server', 'management'):
+            version = self.api_versions().get('management_current_version')
+            return 'v' + version.lstrip('v') if semver(version) else 'Unavailable'
+        if service == 'dashboard':
+            version = self.api_versions().get('dashboard_current_version')
+            return 'v' + version.lstrip('v') if semver(version) else 'Not provided by API'
         c = self.by_service.get(service)
         if not c:
             return 'Unknown'
         programs = {
-            'netbird-server': ['/go/bin/netbird-server', '--version'],
-            'management': ['/go/bin/netbird-mgmt', '--version'],
             'proxy': ['/go/bin/netbird-proxy', '--version'],
             'traefik': ['traefik', 'version'],
             'crowdsec': ['cscli', 'version'],
@@ -581,6 +655,12 @@ class Manager:
         return 'v' + tag.lstrip('v') if semver(tag) else 'Unknown'
 
     def latest(self, repo):
+        if repo in ('netbirdio/netbird', 'netbirdio/dashboard'):
+            key = 'management_available_version' if repo == 'netbirdio/netbird' else 'dashboard_available_version'
+            value = self.api_versions().get(key)
+            if semver(value):
+                return 'v' + value.lstrip('v')
+            return 'Unavailable'
         if repo not in self.latest_cache:
             try:
                 req = urllib.request.Request('https://api.github.com/repos/' + repo + '/releases/latest', headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'NetBird-Server-Manager'})
@@ -595,13 +675,15 @@ class Manager:
     def overview(self):
         self.load()
         self.services = [s for s in self.config['services'] if s in self.COMPONENTS]
-        print('\n{:<4} {:<29} {:<17} {:<17} {}'.format('#', 'Component', 'Installed', 'Latest stable', 'Status'))
+        print('\n{:<4} {:<29} {:<23} {:<17} {}'.format('#', 'Component', 'Installed', 'Available', 'Status'))
         for index, service in enumerate(self.services, 1):
             current = self.installed(service)
             available = self.latest(self.COMPONENTS[service][1])
             a, b = semver(current), semver(available)
             status = 'Unknown' if a is None or b is None else ('Update available' if b > a else ('Up to date' if a == b else 'Installed newer'))
-            print(f'{index:<4} {self.COMPONENTS[service][0]:<29} {current:<17} {available:<17} {status}')
+            if current == 'Not provided by API':
+                status = 'Not reported by API'
+            print(f'{index:<4} {self.COMPONENTS[service][0]:<29} {current:<23} {available:<17} {status}')
             print('     Image: ' + self.config['services'][service].get('image', '(not configured)'))
         for service, spec in self.config['services'].items():
             commands = spec.get('command') or []
@@ -610,7 +692,12 @@ class Manager:
             for command in commands:
                 if 'experimental.plugins.' in str(command) and '.version=' in str(command):
                     print('Plugin setting (review compatibility manually): ' + str(command))
-        print('\nManagement and Dashboard have independent versions. Unknown does not mean up to date.')
+        print('\nManagement and Dashboard version source: authenticated /api/instance/version only.')
+        print('The documented API returns Management installed/available and Dashboard available versions.')
+        print('If dashboard_current_version is absent, its installed version and update status cannot be determined through this API.')
+        if self.api_error:
+            self.say('API status: ' + self.api_error, 33)
+        print('Management and Dashboard have independent versions. Unknown/Unavailable does not mean up to date.')
         return self.services
 
     def selection(self, text):
@@ -815,8 +902,12 @@ class Manager:
         return True
 
     def update(self):
+        if not self.api_settings:
+            self.configure_api()
         self.overview()
         selected = self.selection(self.ask('Select component numbers (space-separated; none preselected): '))
+        if not semver(self.api_versions().get('management_current_version')):
+            raise Failure(self.api_error or 'An authenticated Management version API response is required before updating.')
         targets = {}
         for service in selected:
             latest = self.latest(self.COMPONENTS[service][1])
@@ -873,6 +964,8 @@ class Manager:
             self.health([s for s in selected])
             self.load()
             for service in selected:
+                if self.by_service.get(service, {}).get('Image') != version_records[service]['image_id']:
+                    raise Failure('Running image identity differs from the selected image: ' + service)
                 observed = self.installed(service)
                 if semver(observed) and semver(observed) != semver(targets[service]):
                     raise Failure('Started application version differs from the selected release: ' + service)
@@ -884,6 +977,7 @@ class Manager:
             self.dc('ps', '-a', capture=False)
             print('Backup retained: ' + str(backup))
             print('Sign in to the dashboard and verify peers, policies, networks and a real peer connection.')
+            self.say('Delete/revoke the temporary admin access token now: Dashboard > Team > Users > Owner User > Access Token.', 33)
         except BaseException as error:
             self.say('Update failed: ' + str(error) + '. Backup and previous images are retained at ' + str(backup), 31)
             self.say('Database migrations may require restoring data as well as old images.', 33)
@@ -1008,7 +1102,7 @@ class Manager:
         while True:
             try:
                 self.say('\nUPDATE AND RECOVERY')
-                print('  [1] Check versions and available updates\n  [2] Select components and install updates\n  [3] Restore a previous backup\n  [0] Back')
+                print('  [1] Check versions and available updates\n  [2] Select components and install updates\n  [3] Restore a previous backup\n  [4] Configure authenticated version API\n  [0] Back')
                 choice = self.ask('Select an option: ')
                 if choice == '0':
                     return
@@ -1020,6 +1114,8 @@ class Manager:
                     self.update()
                 elif choice == '3':
                     self.restore_menu()
+                elif choice == '4':
+                    self.configure_api()
                 else:
                     print('Please enter 0, 1, 2, 3 or 4.')
             except TerminalUnavailable as e:

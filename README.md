@@ -2,7 +2,7 @@
 
 An interactive installer, updater and uninstaller for a self-hosted NetBird server on Ubuntu or Debian.
 
-Version **3.0** adds component updates, complete local snapshots, snapshot recovery and a colored ASCII banner. The installer delegates deployment choices to NetBird's original interactive setup wizard.
+Version **3.0.3** adds component updates, complete local snapshots, snapshot recovery and a colored ASCII banner. The installer delegates deployment choices to NetBird's original interactive setup wizard.
 
 ```text
   _   _      _   ____  _         _
@@ -10,7 +10,7 @@ Version **3.0** adds component updates, complete local snapshots, snapshot recov
  |  \| |/ _ \ __|  _ \| | '__/ _` |
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
-          SERVER MANAGER 3.0
+        SERVER MANAGER 3.0.3
 ```
 
 ## Features
@@ -100,6 +100,7 @@ Select **4 — Updates and backup recovery**:
   [1] Check versions and available updates
   [2] Select components and install updates
   [3] Restore a previous backup
+  [4] Configure authenticated version API
   [0] Back
 ```
 
@@ -107,13 +108,42 @@ Select **4 — Updates and backup recovery**:
 
 The overview shows each installed component, its configured image, the latest stable upstream release and the comparison status. Management and Dashboard have **different version numbers and release cycles**; they are compared against their own releases.
 
-Installed versions come from the running application's version command, an explicit numeric container image tag, or a previously recorded release matched to the exact running image ID. Base-OS image labels are not treated as application versions. A `latest` tag is not a version number. When the application version or remote metadata cannot be established, the table shows **Unknown**, not **Up to date**.
+Management and Dashboard versions are read **only from the authenticated `/api/instance/version` endpoint**. The manager does not substitute Docker labels/tags or GitHub releases for those two components. Traefik and CrowdSec still have separate upstream version checks; the NetBird Proxy has its own installed version command and uses the API's Management available release for coordinated updates.
 
-The public GitHub API can be rate-limited or unreachable. A release shown as latest is not proof of compatibility with your custom configuration. Review the displayed release links. Existing Traefik plugin version settings are listed for review; plugin upgrades and required configuration migrations are not automated.
+The documented response provides:
+
+| API field | Displayed meaning |
+| --- | --- |
+| `management_current_version` | Installed Management version |
+| `management_available_version` | Available Management version |
+| `dashboard_available_version` | Available Dashboard version |
+| `dashboard_current_version`, if actually returned | Installed Dashboard version |
+
+The documented example does **not** contain `dashboard_current_version`. When absent, Installed shows **Not provided by API**, and the Dashboard update status shows **Not reported by API**. Available Dashboard version is never relabelled as installed. A Dashboard target can still be explicitly selected by the operator.
+
+### Temporary admin API token
+
+When you select an update without a validated token in the current session, the manager first displays:
+
+```text
+ADMIN API TOKEN REQUIRED
+Open your NetBird Dashboard: Team > Users > Owner User > Access Token.
+Create a temporary admin access token. Set expiration to 1 day.
+Copy it now; NetBird will not show the plain token again.
+After the update, delete/revoke this token in the Dashboard immediately.
+```
+
+Enter the existing deployment's exact HTTPS base URL. Select **Personal access token** (`Authorization: Token`) for a token created at that Dashboard location, or **OAuth access token** (`Authorization: Bearer`) for an OAuth token. Enter the token at the hidden prompt. Submenu option **4** also allows this setup before checking versions.
+
+The newly entered token is kept only in process memory for the current update/recovery submenu session. It is not written to disk, added to backups or printed in logs/shell commands. Leaving the submenu ends the token session. The manager reminds you to revoke the token after a successful update; it does not automatically revoke it or change its server-side expiry.
+
+TLS validation stays enabled. HTTP redirects are rejected so the authorization header is not forwarded. HTTP 401/403, missing fields and connectivity failures are reported explicitly. A successful authenticated Management response is required before application updates proceed. Unsupported or absent API fields remain unavailable rather than guessed.
+
+The script does not recover hashed tokens, scrape browser sessions, create tokens or reuse the distinct reverse-proxy token. Any `.manager-api.json` file created by version 3.0.2 is ignored; revoke its old token and remove that file separately. Old backups may still contain the old saved credentials.
 
 ### Install selected updates
 
-1. Enter component numbers separated by spaces. Nothing is preselected.
+1. Follow the temporary-token instructions when prompted, or configure the current session through submenu option **4**. Then enter component numbers separated by spaces. Nothing is preselected.
 2. Choose an explicit stable target release for each component. The discovered latest stable release is offered as a default, but you can enter another stable version.
 3. Confirm each Docker image tag. Dashboard, Traefik and CrowdSec normally use a `v` prefix; Management and Proxy normally omit it. Both forms are accepted if the numeric version matches the selected release. An unavailable image fails before services are stopped.
 4. Review the component/image plan and type **`UPDATE`**.
@@ -200,6 +230,18 @@ Do not post expanded Compose configuration, `.env`, `config.yaml`, proxy tokens 
 
 An HTTPS check through an external proxy can fail because of DNS, firewall, TLS or proxy configuration even when containers are running. An unauthenticated Management version endpoint returning `401`/`403` confirms an HTTP response, not successful authentication or working peer traffic. When no public address can be inferred, the manager explicitly requests a manual reachability check.
 
+## Version 3.0.3 changes
+
+Temporary admin-token instructions are displayed automatically before updates. Tokens remain in session memory only. Dashboard and Management version fields come exclusively from the authenticated API; missing installed Dashboard version is explicitly labelled instead of read from a different source.
+
+## Version 3.0.2 fixes
+
+Management version detection now uses the authenticated API exclusively. Dashboard detection validates the actual image version/source labels. API credentials are entered interactively and validated before saving.
+
+## Version 3.0.1 fixes
+
+Only the action description is left-aligned; SERVER MANAGER remains indented beneath the logo. The update menu now uses separate read/write descriptors for `/dev/tty`, avoiding the `File or stream is not seekable` error. An unavailable/closed terminal exits the submenu instead of repeating an error indefinitely. Ctrl+C returns without a Python traceback. A script assembly issue affecting the domain validator was also corrected.
+
 ## Validation
 
 ```bash
@@ -207,7 +249,7 @@ bash -n install-netbird-server.sh
 python3 -m unittest discover -s tests -v
 ```
 
-Tests use temporary directories and a fake Docker interface. They cover version handling, selections, cancellation, update/restore, database/key preservation, previously stopped services, snapshot failures, corrupt archives, shared storage, external databases, override settings and uninstall recovery scenarios. They do not contact a live Docker daemon. The test fake models a trusted backup directory so the suite also runs without root.
+Tests use real pseudo-terminals for input/menu regression checks, and temporary directories with a fake Docker interface for update and uninstall scenarios. They cover version handling, selections, cancellation, update/restore, database/key preservation, previously stopped services, snapshot failures, corrupt archives, shared storage, external databases, override settings and uninstall recovery scenarios. They do not contact a live Docker daemon. The test fake models a trusted backup directory so the suite also runs without root.
 
 A complete live Docker deployment and real peer connection have **not** been tested in the authoring environment. Validate on a disposable instance before relying on the recovery workflow for your server. No live server is modified merely by downloading these files.
 
