@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 3.0.6 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 3.0.7 — Ubuntu / Debian, systemd, Bash 4+
+# Developer: Özgür Ulusoy
+# Home Page: https://7byte.dev/
+# Github Repo: https://github.com/7byteDev
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
 # Docker, other projects, the host NetBird client, DNS and cloud rules stay intact.
@@ -7,10 +10,10 @@
 set -Eeuo pipefail
 umask 077
 readonly install_dir=/opt/netbird
-RESET='' CYAN='' BLUE='' GREEN='' YELLOW='' RED='' BOLD=''
+RESET='' CYAN='' BLUE='' GREEN='' YELLOW='' RED='' BOLD='' ORANGE=''
 if [[ -t 1 && -z "${NO_COLOR+x}" && "${TERM:-dumb}" != dumb ]]; then
   RESET=$'\033[0m' CYAN=$'\033[36m' BLUE=$'\033[34m'
-  GREEN=$'\033[32m' YELLOW=$'\033[33m' RED=$'\033[31m' BOLD=$'\033[1m'
+  GREEN=$'\033[32m' YELLOW=$'\033[33m' RED=$'\033[31m' BOLD=$'\033[1m' ORANGE=$'\033[38;5;208m'
 fi
 die() { printf '\n%sERROR: %s%s\n' "$RED" "$*" "$RESET" >&2; exit 1; }
 step() { printf '\n%s==> %s%s\n' "$CYAN" "$*" "$RESET"; }
@@ -26,8 +29,13 @@ header() {
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
 LOGO
-  printf '%s%s        SERVER MANAGER 3.0.6%s\n' "$RESET" "$BLUE" "$RESET"
-  printf 'Install | Uninstall | Update | Restore\n\n'
+  printf '%s%s        SERVER MANAGER 3.0.7%s\n' "$RESET" "$BLUE" "$RESET"
+  printf 'Install | Uninstall | Update | Restore\n'
+  printf '%s\n' '------------------------------------------------'
+  printf '%-14s %s%s%s\n' 'Developer:' "$ORANGE" 'Özgür Ulusoy' "$RESET"
+  printf '%-14s %s%s%s\n' 'Home Page:' "$ORANGE" 'https://7byte.dev/' "$RESET"
+  printf '%-14s %s%s%s\n' 'Github Repo:' "$ORANGE" 'https://github.com/7byteDev' "$RESET"
+  printf '%s\n\n' '------------------------------------------------'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
 }
 
@@ -704,10 +712,12 @@ class Manager:
         self.load()
         self.services = [s for s in self.config['services'] if s in self.COMPONENTS]
         rows = []
+        comparisons = []
         for index, service in enumerate(self.services, 1):
             current = self.installed(service)
             available = self.latest(self.COMPONENTS[service][1])
             a, b = semver(current), semver(available)
+            comparisons.append(a is not None and b is not None and a >= b)
             status = 'Unknown' if a is None or b is None else ('Update available' if b > a else ('Up to date' if a == b else 'Installed newer'))
             installed_source = 'API' if service in ('netbird-server', 'management') else ('Image metadata' if service == 'dashboard' else 'Container')
             available_source = 'API' if service in ('netbird-server', 'management', 'dashboard', 'proxy') else 'Upstream'
@@ -718,6 +728,7 @@ class Manager:
         print('\n' + '  '.join(headings[i].ljust(widths[i]) for i in range(4)) + '  Status')
         for row in rows:
             print('  '.join(row[i].ljust(widths[i]) for i in range(4)) + '  ' + self.colored_status(row[4]))
+        self.all_current = bool(comparisons) and all(comparisons)
         for service, spec in self.config['services'].items():
             commands = spec.get('command') or []
             if not isinstance(commands, list):
@@ -934,7 +945,22 @@ class Manager:
         if not self.api_settings:
             self.configure_api()
         self.overview()
-        selected = self.selection(self.ask('Select component numbers (space-separated; none preselected): '))
+        if self.all_current:
+            self.say('\nAll components are up to date. No update is required.', 32)
+            print('  [0] Back to UPDATE AND RECOVERY\n  [M] Back to main menu')
+            while True:
+                answer = self.credential_prompt('Select an option (0 or M): ').lower()
+                if answer == '0':
+                    return
+                if answer == 'm':
+                    return 'main'
+                print('Please enter 0 or M.')
+        answer = self.credential_prompt('Select component numbers (space-separated), 0 = Update menu, M = Main menu: ')
+        if answer == '0':
+            return
+        if answer.lower() == 'm':
+            return 'main'
+        selected = self.selection(answer)
         if not semver(self.api_versions().get('management_current_version')):
             raise Failure(self.api_error or 'An authenticated Management version API response is required before updating.')
         targets = {}
@@ -1130,7 +1156,8 @@ class Manager:
                     return
                 if choice == '1':
                     self.latest_cache.clear()
-                    self.update()
+                    if self.update() == 'main':
+                        return
                 elif choice == '2':
                     self.restore_menu()
                 else:
@@ -1175,7 +1202,7 @@ main() {
       1) install_server "${1:-}" ;;
       2) uninstall_server ;;
       3) status_server ;;
-      4) update_menu ;;
+      4) update_menu; continue ;;
       0) exit 0 ;;
       *) printf 'Please enter 0, 1, 2, 3 or 4.\n' ;;
     esac
