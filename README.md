@@ -1,7 +1,6 @@
-
-<div align="center">
 # NetBird Server Manager
 
+<div align="center">
 A simple, menu-driven tool to install, update, back up, restore and uninstall a self-hosted NetBird server on Ubuntu or Debian.
 
 [![Website](https://img.shields.io/badge/7byte.dev-Visit_website-168FFF?style=for-the-badge)](https://7byte.dev)
