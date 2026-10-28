@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 3.0.3 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 3.0.4 — Ubuntu / Debian, systemd, Bash 4+
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
 # Docker, other projects, the host NetBird client, DNS and cloud rules stay intact.
@@ -26,7 +26,7 @@ header() {
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
 LOGO
-  printf '%s%s        SERVER MANAGER 3.0.3%s\n' "$RESET" "$BLUE" "$RESET"
+  printf '%s%s        SERVER MANAGER 3.0.4%s\n' "$RESET" "$BLUE" "$RESET"
   printf 'Install | Uninstall | Update | Restore\n\n'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
 }
@@ -592,7 +592,7 @@ class Manager:
             self.api_cache = {}
             try:
                 if not self.api_settings:
-                    raise Failure('Enter a temporary admin API token for this session using submenu option [4], or select Update to be prompted.')
+                    raise Failure('Choose [2] Check and install updates to enter a temporary admin API token for this session.')
                 self.api_cache = self.request_version_api(self.api_settings)
             except (Failure, OSError, ValueError) as error:
                 self.api_error = str(error)
@@ -626,8 +626,16 @@ class Manager:
             version = self.api_versions().get('management_current_version')
             return 'v' + version.lstrip('v') if semver(version) else 'Unavailable'
         if service == 'dashboard':
-            version = self.api_versions().get('dashboard_current_version')
-            return 'v' + version.lstrip('v') if semver(version) else 'Not provided by API'
+            c = self.by_service.get(service)
+            if not c:
+                return 'Unknown'
+            image = json.loads(self.docker('image', 'inspect', c['Image']))[0]
+            labels = image.get('Config', {}).get('Labels') or {}
+            source = labels.get('org.opencontainers.image.source', '').rstrip('/').removesuffix('.git')
+            version = labels.get('org.opencontainers.image.version', '')
+            if source == 'https://github.com/netbirdio/dashboard' and semver(version):
+                return 'v' + version.lstrip('v')
+            return 'Unknown'
         c = self.by_service.get(service)
         if not c:
             return 'Unknown'
@@ -672,19 +680,30 @@ class Manager:
                 self.latest_cache[repo] = 'Unknown'
         return self.latest_cache[repo]
 
+    def colored_status(self, status):
+        if not self.colors:
+            return status
+        color = {'Update available': '32', 'Up to date': '38;5;208'}.get(status)
+        return f'\033[{color}m{status}\033[0m' if color else status
+
     def overview(self):
         self.load()
         self.services = [s for s in self.config['services'] if s in self.COMPONENTS]
-        print('\n{:<4} {:<29} {:<23} {:<17} {}'.format('#', 'Component', 'Installed', 'Available', 'Status'))
+        rows = []
         for index, service in enumerate(self.services, 1):
             current = self.installed(service)
             available = self.latest(self.COMPONENTS[service][1])
             a, b = semver(current), semver(available)
             status = 'Unknown' if a is None or b is None else ('Update available' if b > a else ('Up to date' if a == b else 'Installed newer'))
-            if current == 'Not provided by API':
-                status = 'Not reported by API'
-            print(f'{index:<4} {self.COMPONENTS[service][0]:<29} {current:<23} {available:<17} {status}')
-            print('     Image: ' + self.config['services'][service].get('image', '(not configured)'))
+            installed_source = 'API' if service in ('netbird-server', 'management') else ('Image metadata' if service == 'dashboard' else 'Container')
+            available_source = 'API' if service in ('netbird-server', 'management', 'dashboard', 'proxy') else 'Upstream'
+            rows.append([str(index), self.COMPONENTS[service][0], current + ' · ' + installed_source,
+                         available + ' · ' + available_source, status])
+        headings = ['#', 'Component', 'Installed', 'Available', 'Status']
+        widths = [max(len(row[i]) for row in [headings] + rows) for i in range(4)]
+        print('\n' + '  '.join(headings[i].ljust(widths[i]) for i in range(4)) + '  Status')
+        for row in rows:
+            print('  '.join(row[i].ljust(widths[i]) for i in range(4)) + '  ' + self.colored_status(row[4]))
         for service, spec in self.config['services'].items():
             commands = spec.get('command') or []
             if not isinstance(commands, list):
@@ -692,12 +711,8 @@ class Manager:
             for command in commands:
                 if 'experimental.plugins.' in str(command) and '.version=' in str(command):
                     print('Plugin setting (review compatibility manually): ' + str(command))
-        print('\nManagement and Dashboard version source: authenticated /api/instance/version only.')
-        print('The documented API returns Management installed/available and Dashboard available versions.')
-        print('If dashboard_current_version is absent, its installed version and update status cannot be determined through this API.')
         if self.api_error:
             self.say('API status: ' + self.api_error, 33)
-        print('Management and Dashboard have independent versions. Unknown/Unavailable does not mean up to date.')
         return self.services
 
     def selection(self, text):
@@ -1102,22 +1117,17 @@ class Manager:
         while True:
             try:
                 self.say('\nUPDATE AND RECOVERY')
-                print('  [1] Check versions and available updates\n  [2] Select components and install updates\n  [3] Restore a previous backup\n  [4] Configure authenticated version API\n  [0] Back')
+                print('  [2] Check and install updates\n  [3] Restore a previous backup\n  [0] Back')
                 choice = self.ask('Select an option: ')
                 if choice == '0':
                     return
-                if choice == '1':
-                    self.latest_cache.clear()
-                    self.overview()
-                elif choice == '2':
+                if choice == '2':
                     self.latest_cache.clear()
                     self.update()
                 elif choice == '3':
                     self.restore_menu()
-                elif choice == '4':
-                    self.configure_api()
                 else:
-                    print('Please enter 0, 1, 2, 3 or 4.')
+                    print('Please enter 0, 2 or 3.')
             except TerminalUnavailable as e:
                 self.say('ERROR: ' + str(e), 31)
                 return
