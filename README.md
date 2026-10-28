@@ -2,30 +2,7 @@
 
 A simple, menu-driven tool to install, update, back up, restore and uninstall a self-hosted NetBird server on Ubuntu or Debian.
 
-```bash
-  _   _      _   ____  _         _
- | \ | | ___| |_| __ )(_)_ __ __| |
- |  \| |/ _ \ __|  _ \| | '__/ _` |
- | |\  |  __/ |_| |_) | | | | (_| |
- |_| \_|\___|\__|____/|_|_|  \__,_|
-        SERVER MANAGER 3.0.8
-Install | Uninstall | Update | Restore
-------------------------------------------------
-Developer:     Özgür Ulusoy
-Website:       https://7byte.dev/
-Github Repo:   https://github.com/7byteDev
-------------------------------------------------
-
-Docker stays installed during uninstall.
-
-  [1] Install NetBird server
-  [2] Uninstall NetBird server and its data
-  [3] Show status
-  [4] Updates and backup recovery
-  [0] Exit
-
-Select an option: 
-```
+<img width="619" height="340" alt="image" src="https://github.com/user-attachments/assets/bcc4dcf4-ac8d-4671-93de-8a538d2c214a" />
 
 ## Features
 
