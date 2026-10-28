@@ -1,233 +1,224 @@
-# NetBird Self-Hosted Server Installer
+# NetBird Server Manager
 
-Install a self-hosted NetBird server on Ubuntu or Debian using Docker.
+An interactive installer, updater and uninstaller for a self-hosted NetBird server on Ubuntu or Debian.
 
-## What the script does
+Version **3.0** adds component updates, complete local snapshots, snapshot recovery and a colored ASCII banner. The installer delegates deployment choices to NetBird's original interactive setup wizard.
 
-- Updates APT package lists and upgrades installed packages.
-- Installs required tools, including curl, jq, OpenSSL and htop.
-- Checks domain resolution and local port availability.
-- Installs Docker Engine and the Docker Compose plugin from Docker’s official APT repository.
-- Enables and starts Docker.
-- Opens the required ports if UFW is already active.
-- Downloads and runs the official NetBird server installation assistant.
+```text
+  _   _      _   ____  _         _
+ | \ | | ___| |_| __ )(_)_ __ __| |
+ |  \| |/ _ \ __|  _ \| | '__/ _` |
+ | |\  |  __/ |_| |_) | | | | (_| |
+ |_| \_|\___|\__|____/|_|_|  \__,_|
+          SERVER MANAGER 3.0
+```
 
-The script does not automatically reboot the server.
+## Features
+
+- English interactive menus with cyan information, green success, yellow prompts and red errors.
+- Domain input without a preset personal domain.
+- System update and Docker installation when installing a new server.
+- Original NetBird wizard choices: reverse proxy, optional NetBird Proxy, CrowdSec and other applicable settings.
+- Independent version checks for Management, Dashboard, Proxy, Traefik and CrowdSec.
+- Explicit component, release and Docker-tag selection before an update.
+- A complete pre-update snapshot of configuration, persistent data and old container images.
+- Recovery using the saved images and database state, including after a database migration.
+- Removal of the NetBird Compose stack, optional bundled services and installation files while keeping Docker installed.
+- Backups stored outside the installation directory and retained during uninstall.
 
 ## Requirements
 
-- Ubuntu or Debian with systemd.
-- Root or sudo access.
-- At least 1 CPU and 2 GB RAM.
-- Internet access.
-- A public domain pointing to the server’s public IP.
-- TCP ports 80 and 443, and UDP port 3478 available.
+| Requirement | Details |
+| --- | --- |
+| Host | Ubuntu or Debian with Bash, APT and systemd |
+| Privileges | Root or `sudo` |
+| Terminal | An interactive SSH/console session; run the downloaded file, not a pipe |
+| Docker | Docker Engine and the Docker Compose v2 plugin |
+| Update dependencies | Python 3.10+ and PyYAML (`python3-yaml`); installation is offered if missing |
+| Connectivity | OS/Docker repositories, GitHub releases API and the container registry |
+| Storage | Free space for configuration, data archives, saved images and headroom |
 
-For example:
+Automatic update and recovery support the **combined `netbird-server` layout with explicitly configured SQLite**, project-owned local named volumes, and files inside `/opt/netbird`. Legacy split Management/Signal/Relay layouts are detected but require a separate migration workflow.
 
-| DNS type | Hostname | Value |
-|---|---|---|
-| A | netbird.example.com | Your server’s public IPv4 address |
+External PostgreSQL/MySQL databases, external writable data directories, remote/custom volume drivers, anonymous/external volumes, scaled services, additional custom Compose files, symlinks and nested mounts require a tailored backup workflow. The updater stops with an explanation rather than creating an incomplete snapshot.
 
-If an AAAA record exists, it must point to a working IPv6 address on this server.
+## Quick start
 
-If using Cloudflare, set the record to **DNS only**.
-
-## Firewall configuration
-
-Allow these incoming connections in the cloud firewall and any upstream firewall:
-
-| Protocol | Port | Source |
-|---|---|---|
-| TCP | 80 | Internet |
-| TCP | 443 | Internet |
-| UDP | 3478 | Internet |
-
-For IPv4, the source range is `0.0.0.0/0`.
-
-If using IPv6, configure corresponding IPv6 firewall rules.
-
-The script cannot configure your cloud provider’s firewall. Outbound access must also permit DNS, package downloads, container downloads and HTTPS connections.
-
-## Installation
-
-Upload `install-netbird-server.sh` to your server, then run:
+Download `install-netbird-server.sh` from this repository, review it, copy it to the server and run:
 
 ```bash
 sudo bash install-netbird-server.sh
 ```
 
-Replace `netbird.example.com` with your domain.
-
-When logged in as root:
+Optionally provide a domain as an argument; it is still shown for confirmation:
 
 ```bash
-bash install-netbird-server.sh
+sudo bash install-netbird-server.sh netbird.example.com
 ```
 
-You can also omit the domain and enter it when prompted:
+To disable terminal colors:
 
 ```bash
-sudo bash install-netbird-server.sh
+sudo env NO_COLOR=1 bash install-netbird-server.sh
 ```
 
-Run the script interactively in a terminal.
+The file is self-contained. Its Python update engine is embedded in the Bash script; no additional project files are needed on the server.
 
-## Installation assistant
-
-For a new, dedicated server:
-
-1. Select **0 — Traefik** as the reverse proxy.
-2. Enter your email address for certificate notifications.
-3. Answer **N** to the optional NetBird Proxy service unless you want to publish internal services to the internet.
-4. Follow any remaining prompts.
-
-Traefik handles HTTPS certificates automatically.
-
-After installation, open:
+## Main menu
 
 ```text
-https://netbird.example.com
+  [1] Install NetBird server
+  [2] Uninstall NetBird server and its data
+  [3] Show status
+  [4] Updates and backup recovery
+  [0] Exit
 ```
 
-Complete the administrator account setup.
+### Install
 
-## Connect a Windows client
+1. Select **1** and enter your domain without `https://`, a port or a path.
+2. The script runs `apt-get update` and `apt-get upgrade`, installs prerequisites and installs Docker from its official APT repository if necessary.
+3. DNS and current listeners are checked. Configure the cloud firewall/router yourself.
+4. The current official NetBird setup script is downloaded and run interactively in `/opt/netbird`.
+5. Choose the reverse proxy and optional services in the official wizard, then finish administrator onboarding in the dashboard.
 
-Install the NetBird Windows client, then open PowerShell as Administrator:
+Only the domain entered in this manager is passed as a preset wizard answer. Inherited `NETBIRD_*` preset answers are cleared in the wizard's child process so its applicable questions remain available. The manager does not force Traefik, Proxy or CrowdSec on or off.
 
-```powershell
-& "C:\Program Files\NetBird\netbird.exe" up --management-url https://netbird.example.com
+A nonempty `/opt/netbird` is never overwritten by the install action. Use the update menu for upgrades. Installation does not reboot the host automatically and does not silently remove conflicting container-runtime packages.
+
+### DNS and ports
+
+Point the domain's A/AAAA records at the server. Use **DNS only** with Cloudflare for the standard direct deployment. The basic quickstart requires inbound TCP **80/443** and UDP **3478**. The optional NetBird Proxy also uses UDP **51820** in the current upstream deployment; additional published services may need additional rules.
+
+The manager adds basic port rules to an already active UFW firewall and tags new rules `netbird-server-installer`. It does not enable UFW or configure a cloud firewall/router. Existing rules are retained. Docker-published ports can bypass UFW rules; review the provider firewall and Docker networking separately.
+
+## Updates
+
+Select **4 — Updates and backup recovery**:
+
+```text
+  [1] Check versions and available updates
+  [2] Select components and install updates
+  [3] Restore a previous backup
+  [0] Back
 ```
 
-Complete the browser login using your self-hosted account.
+### Version checks
 
-Check the connection:
+The overview shows each installed component, its configured image, the latest stable upstream release and the comparison status. Management and Dashboard have **different version numbers and release cycles**; they are compared against their own releases.
 
-```powershell
-& "C:\Program Files\NetBird\netbird.exe" status
-```
+Installed versions come from the running application's version command, an explicit numeric container image tag, or a previously recorded release matched to the exact running image ID. Base-OS image labels are not treated as application versions. A `latest` tag is not a version number. When the application version or remote metadata cannot be established, the table shows **Unknown**, not **Up to date**.
 
-## Server management
+The public GitHub API can be rate-limited or unreachable. A release shown as latest is not proof of compatibility with your custom configuration. Review the displayed release links. Existing Traefik plugin version settings are listed for review; plugin upgrades and required configuration migrations are not automated.
 
-Run these commands as root, or prefix Docker commands with sudo.
+### Install selected updates
 
-### Show container status
+1. Enter component numbers separated by spaces. Nothing is preselected.
+2. Choose an explicit stable target release for each component. The discovered latest stable release is offered as a default, but you can enter another stable version.
+3. Confirm each Docker image tag. Dashboard, Traefik and CrowdSec normally use a `v` prefix; Management and Proxy normally omit it. Both forms are accepted if the numeric version matches the selected release. An unavailable image fails before services are stopped.
+4. Review the component/image plan and type **`UPDATE`**.
+5. Target images are downloaded and resolved to immutable repository digests. A small Alpine helper image is downloaded for volume archiving.
+6. A complete snapshot is taken. Running project services are briefly stopped for database consistency. Previously stopped services remain stopped unless you explicitly selected them for update.
+7. Only the selected services are recreated, in dependency-conscious order, using their downloaded images. Unselected previously running services are restarted with their existing containers.
+8. Container state, healthchecks, restart counts and available HTTPS endpoints are checked. Verify dashboard login and actual peer connectivity yourself afterward.
+
+Management and the optional NetBird Proxy are checked as a pair. Select matching target releases together unless the unchanged component is already known to run the same release. Dashboard is compared independently. Traefik and CrowdSec can be selected separately and are never silently included.
+
+The updater does not run an OS upgrade, upgrade Docker, rerun NetBird's installation wizard, remove volumes or delete old images. A short maintenance interruption occurs during the snapshot and selected service recreation.
+
+### Fixed tags and Compose overrides
+
+The updater preserves the base Compose file and writes selected image digests to the conventional override file:
+
+- `docker-compose.override.yml` for a `docker-compose.*` base.
+- `compose.override.yaml` for a `compose.*` base.
+
+An existing standard override is reused; its settings are preserved semantically, but YAML formatting/comments may be rewritten. More than one override file is refused to avoid an ambiguous merge. The default `docker compose` discovery reads the conventional override. If you run Compose manually with `-f`, explicitly include the override too:
 
 ```bash
 cd /opt/netbird
-docker compose ps
+sudo docker compose -f docker-compose.yml -f docker-compose.override.yml ps -a
 ```
 
-### Show recent logs
+The example assumes those filenames exist. Use your actual base/override names. Changes to the base `image:` or image variables can be masked by the override; review both files when managing tags manually.
 
-```bash
-cd /opt/netbird
-docker compose logs --tail=100
+## Backups and recovery
+
+Snapshots are stored under:
+
+```text
+/var/backups/netbird/<UTC-timestamp>-<process-id>/
 ```
 
-### Follow logs
+| Snapshot file | Contents |
+| --- | --- |
+| `config.tar.gz` | Installation directory, including Compose files, `.env`, server configuration, proxy token, CrowdSec configuration and bind-mounted files under the directory |
+| `volumes/*.tar.gz` | Every supported data volume attached to the project containers, including Management database/keys, CrowdSec database and certificate volumes |
+| `images.tar` | Previous container images and the volume helper image, saved for local recovery |
+| `manifest.json` | Original service/image identities, running state and volume mount mappings |
+| `checksums.json` | SHA-256 checksums of the snapshot files |
+| `COMPLETE` | Marker written only after the snapshot completes |
 
-```bash
-cd /opt/netbird
-docker compose logs -f
-```
+The backup directory is root-owned with restricted permissions. **Backups contain database encryption keys, setup data, tokens and certificates. Keep them private and copy a complete snapshot off the server.** There is no automatic retention/deletion policy. Checksums detect corruption; they do not make an untrusted backup safe to import.
 
-Press Ctrl+C to stop viewing logs.
+If the backup fails, no new application image is started and the manager attempts to restart the previously running containers. Partial backups have no `COMPLETE` marker and cannot be selected for recovery.
 
-### Restart services
+If an update fails after its snapshot completes, the manager offers to restore that snapshot. Restoration is an explicit choice because it replaces the current database state, including changes made after the snapshot. Downgrading only the container image may be unsafe after a database migration.
 
-```bash
-cd /opt/netbird
-docker compose restart
-```
+For later recovery, select **4 → 3**, choose a complete snapshot and type **`RESTORE`**. Recovery:
 
-### Restart Traefik
+1. Verifies checksums and archive paths before changing the deployment.
+2. Loads the saved old images before stopping current services.
+3. Stops/removes project containers without deleting their volumes.
+4. Preserves the current configuration in a `pre-restore-*` directory and restores the snapshot configuration.
+5. Pins the saved images through local rollback tags, recreates containers without starting them and validates their volume mappings.
+6. Restores volume data and starts the services recorded as running in the snapshot.
 
-```bash
-cd /opt/netbird
-docker compose restart traefik
-```
+Use only trusted snapshots created for the same installation directory. External proxy configuration, external databases, cloud firewall rules and DNS are outside this local recovery workflow. The local snapshot remains available after uninstall as long as the server disk is retained.
+
+## Uninstall
+
+Select **2** in the main menu. Review the projects, containers, volumes and directory shown, then type **`DELETE`** to confirm permanent removal.
+
+The manager uses `docker compose down --volumes --remove-orphans`, including the conventional override when present. It then removes any remaining resources identified by the installation's Compose project labels and verifies that no project containers, volumes or networks remain before deleting `/opt/netbird`.
+
+The bundled `netbird-traefik`, `netbird-crowdsec`, `netbird-proxy`, `netbird-dashboard` and `netbird-server` containers are included when they belong to this installation. CrowdSec configuration, its database and Traefik/Proxy certificate volumes are included. Missing/invalid Compose files fall back to Docker project labels. Images used by the removed containers are removed only where possible without forcing deletion of images used elsewhere.
+
+**Docker, the host NetBird client, unrelated Docker projects, update snapshots, DNS and cloud firewall rules remain.** External bind paths/volumes are displayed for manual review. An existing external reverse proxy is not treated as a bundled NetBird component. UFW cleanup targets rules tagged by this manager.
 
 ## Troubleshooting
 
-### Certificate request times out
-
-Check that:
-
-- The domain resolves to the server’s current public IP.
-- Incoming TCP 443 is allowed.
-- The cloud firewall rule applies to this VM.
-- Any configured IPv6 record works.
-- Cloudflare proxying is disabled for the hostname.
-
-After correcting connectivity:
-
 ```bash
 cd /opt/netbird
-docker compose restart traefik
-docker compose logs --since=2m traefik
+sudo docker compose ps -a
+sudo docker compose config --services
+sudo docker compose images
+sudo docker compose logs --tail=100 netbird-server
 ```
 
-### Windows cannot resolve the domain
+Do not post expanded Compose configuration, `.env`, `config.yaml`, proxy tokens or backups publicly. Use the actual service name if your configuration differs.
 
-Compare the default DNS answer with a public resolver:
+An HTTPS check through an external proxy can fail because of DNS, firewall, TLS or proxy configuration even when containers are running. An unauthenticated Management version endpoint returning `401`/`403` confirms an HTTP response, not successful authentication or working peer traffic. When no public address can be inferred, the manager explicitly requests a manual reachability check.
 
-```powershell
-Resolve-DnsName netbird.example.com
-Resolve-DnsName netbird.example.com -Server 1.1.1.1
+## Validation
+
+```bash
+bash -n install-netbird-server.sh
+python3 -m unittest discover -s tests -v
 ```
 
-If only the public resolver succeeds, check your local DNS server and DHCP DNS settings.
+Tests use temporary directories and a fake Docker interface. They cover version handling, selections, cancellation, update/restore, database/key preservation, previously stopped services, snapshot failures, corrupt archives, shared storage, external databases, override settings and uninstall recovery scenarios. They do not contact a live Docker daemon. The test fake models a trusted backup directory so the suite also runs without root.
 
-### Windows reports that the daemon is not responding
+A complete live Docker deployment and real peer connection have **not** been tested in the authoring environment. Validate on a disposable instance before relying on the recovery workflow for your server. No live server is modified merely by downloading these files.
 
-Open PowerShell as Administrator:
+## References
 
-```powershell
-& "C:\Program Files\NetBird\netbird.exe" service restart
-& "C:\Program Files\NetBird\netbird.exe" status
-```
+- [NetBird self-hosting quickstart](https://docs.netbird.io/selfhosted/selfhosted-quickstart)
+- [NetBird upgrade guide](https://docs.netbird.io/selfhosted/maintenance/upgrade)
+- [NetBird backup and restore guide](https://docs.netbird.io/selfhosted/maintenance/backup)
+- [Original NetBird installer](https://github.com/netbirdio/netbird/blob/main/infrastructure_files/getting-started.sh)
+- [Docker Compose file merging](https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/)
+- [Docker installation on Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
+- [Docker installation on Debian](https://docs.docker.com/engine/install/debian/)
 
-View recent client logs:
-
-```powershell
-Get-Content "C:\ProgramData\netbird\client.log" -Tail 80
-```
-
-### The installer refuses to continue
-
-The script stops when:
-
-- `/opt/netbird` already contains files.
-- Conflicting Docker or container runtime packages are installed.
-- Required ports are already occupied.
-- The domain cannot be resolved.
-- A required installation command fails.
-
-Inspect the reported problem before retrying. Do not delete an existing installation or its data to bypass a check.
-
-## Backups
-
-Back up both:
-
-- Configuration files under `/opt/netbird`.
-- Persistent data in the Docker volumes used by the deployment.
-
-A copy of `/opt/netbird` alone does not include named Docker volume contents. Use a consistent backup method for database data.
-
-Keep backups private because configuration and data may contain credentials and keys.
-
-## Notes
-
-- This installs the NetBird server stack. Enrolling the server itself as a VPN peer is a separate step.
-- Existing host NetBird clients remain installed.
-- Package upgrades may restart services.
-- The script downloads the latest official NetBird installer, so its prompts and deployment details may change.
-- Bash syntax has been checked; a complete deployment has not been tested by the script author in this environment.
-
-## Official documentation
-
-- NetBird: https://docs.netbird.io/selfhosted/selfhosted-quickstart
-- Docker on Ubuntu: https://docs.docker.com/engine/install/ubuntu/
-- Docker on Debian: https://docs.docker.com/engine/install/debian/
+This is an independent helper, not an official NetBird project. Upstream software retains its own licenses.
