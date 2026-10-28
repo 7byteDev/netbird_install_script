@@ -5,12 +5,30 @@ An interactive installer, updater and uninstaller for a self-hosted NetBird serv
 Version **3.0.3** adds component updates, complete local snapshots, snapshot recovery and a colored ASCII banner. The installer delegates deployment choices to NetBird's original interactive setup wizard.
 
 ```text
+
   _   _      _   ____  _         _
  | \ | | ___| |_| __ )(_)_ __ __| |
  |  \| |/ _ \ __|  _ \| | '__/ _` |
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
-        SERVER MANAGER 3.0.3
+        SERVER MANAGER 3.0.8
+Install | Uninstall | Update | Restore
+------------------------------------------------
+Developer:     Özgür Ulusoy
+Website:       https://7byte.dev/
+Github Repo:   https://github.com/7byteDev
+------------------------------------------------
+
+Docker stays installed during uninstall.
+
+  [1] Install NetBird server
+  [2] Uninstall NetBird server and its data
+  [3] Show status
+  [4] Updates and backup recovery
+  [0] Exit
+
+Select an option: 
+
 ```
 
 ## Features
