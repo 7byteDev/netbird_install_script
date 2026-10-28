@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NetBird Server Manager 3.0.4 — Ubuntu / Debian, systemd, Bash 4+
+# NetBird Server Manager 3.0.5 — Ubuntu / Debian, systemd, Bash 4+
 # Start: sudo bash install-netbird-server.sh [DOMAIN]
 # Delete scope: /opt/netbird, its Compose resources and tagged UFW rules.
 # Docker, other projects, the host NetBird client, DNS and cloud rules stay intact.
@@ -26,7 +26,7 @@ header() {
  | |\  |  __/ |_| |_) | | | | (_| |
  |_| \_|\___|\__|____/|_|_|  \__,_|
 LOGO
-  printf '%s%s        SERVER MANAGER 3.0.4%s\n' "$RESET" "$BLUE" "$RESET"
+  printf '%s%s        SERVER MANAGER 3.0.5%s\n' "$RESET" "$BLUE" "$RESET"
   printf 'Install | Uninstall | Update | Restore\n\n'
   printf '%sDocker stays installed during uninstall.%s\n\n' "$GREEN" "$RESET"
 }
@@ -430,6 +430,11 @@ def semver(value):
     m = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', value or '')
     return tuple(map(int, m.groups())) if m else None
 
+def masked_token(token):
+    # Show only the explicitly requested short prefix, never a complete token.
+    prefix = token[:5] if len(token) > 5 else ''
+    return prefix + '*' * (len(token) - len(prefix))
+
 def repository(image):
     image = image.split('@')[0]
     head, slash, tail = image.rpartition('/')
@@ -481,6 +486,14 @@ class Manager:
 
     def say(self, text, color=36):
         print(f'\033[{color}m{text}\033[0m' if self.colors else text, flush=True)
+
+    def credential_prompt(self, message, secret=False):
+        prompt = f'\033[33m{message}\033[97m' if self.colors else message
+        try:
+            return getpass.getpass(prompt) if secret else self.ask(prompt)
+        finally:
+            if self.colors:
+                print('\033[0m', end='', flush=True)
 
     def run(self, args, capture=True, check=True):
         result = subprocess.run([str(x) for x in args], text=True,
@@ -592,7 +605,7 @@ class Manager:
             self.api_cache = {}
             try:
                 if not self.api_settings:
-                    raise Failure('Choose [2] Check and install updates to enter a temporary admin API token for this session.')
+                    raise Failure('Choose [1] Check and install updates to enter a temporary admin API token for this session.')
                 self.api_cache = self.request_version_api(self.api_settings)
             except (Failure, OSError, ValueError) as error:
                 self.api_error = str(error)
@@ -609,12 +622,13 @@ class Manager:
         print('This script uses the token only in memory for this session; it is not saved to disk.')
         if (self.root / '.manager-api.json').exists():
             self.say('A token file from an older manager version exists. It is ignored; revoke its token and remove that file separately.', 33)
-        url = self.ask('NetBird HTTPS base URL (for your existing deployment): ').rstrip('/')
-        print('Authentication: [1] Personal access token (Token)  [2] OAuth access token (Bearer)')
-        kind = self.ask('Authentication type (1 or 2): ')
+        url = self.credential_prompt('NetBird HTTPS base URL (for your existing deployment): ').rstrip('/')
+        self.say('Authentication: [1] Personal access token (Token)  [2] OAuth access token (Bearer)', 33)
+        kind = self.credential_prompt('Authentication type (1 or 2): ')
         if kind not in ('1', '2'):
             raise Failure('Select 1 or 2. No authentication type has been assumed.')
-        token = getpass.getpass('Temporary admin access token (hidden; session only): ')
+        token = self.credential_prompt('Temporary admin access token (hidden; session only): ', secret=True)
+        self.say(masked_token(token), 97)
         settings = {'url': url, 'scheme': 'Token' if kind == '1' else 'Bearer', 'token': token}
         data = self.request_version_api(settings)
         self.api_settings = settings
@@ -1117,17 +1131,17 @@ class Manager:
         while True:
             try:
                 self.say('\nUPDATE AND RECOVERY')
-                print('  [2] Check and install updates\n  [3] Restore a previous backup\n  [0] Back')
+                print('  [1] Check and install updates\n  [2] Restore a previous backup\n  [0] Back')
                 choice = self.ask('Select an option: ')
                 if choice == '0':
                     return
-                if choice == '2':
+                if choice == '1':
                     self.latest_cache.clear()
                     self.update()
-                elif choice == '3':
+                elif choice == '2':
                     self.restore_menu()
                 else:
-                    print('Please enter 0, 2 or 3.')
+                    print('Please enter 0, 1 or 2.')
             except TerminalUnavailable as e:
                 self.say('ERROR: ' + str(e), 31)
                 return
